@@ -27,7 +27,8 @@ jobs:
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-      - run: |
+      - name: Add github.com to known_hosts
+        run: |
           mkdir -p ~/.ssh
           ssh-keyscan github.com >> ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
@@ -66,15 +67,16 @@ jobs:
       - name: Add new submodules via SSH
         id: add
         run: |
+          set -e
           added=false
           while read -r name url; do
             echo "Checking $name..."
             [[ "$name" =~ workspace ]] && { echo "Skipping workspace root"; continue; }
             if ! grep -Fxq "$name" existing.txt; then
               echo "✅ Adding submodule: $name"
-              git submodule add --branch main "$url" "$name" || continue
+              git submodule add --force --name "$name" --branch main "$url" "$name" || continue
               sed -i "/path = $name/a\\    ignore = all" .gitmodules
-              git add "$name"
+              git add .gitmodules "$name"
               added=true
             else
               echo "➡️ Already tracked: $name"
@@ -85,7 +87,6 @@ jobs:
       - name: Commit & push changes
         if: steps.add.outputs.added == 'true'
         run: |
-          git add .gitmodules */
           git commit -m "chore: auto-add new submodules"
           git push origin main
 
