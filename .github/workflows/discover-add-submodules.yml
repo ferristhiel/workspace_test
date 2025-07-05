@@ -53,8 +53,7 @@ jobs:
       - name: Authenticate GitHub CLI
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh auth setup-git
+        run: gh auth setup-git
 
       - name: Fetch all repos via GH CLI
         id: list
@@ -65,16 +64,17 @@ jobs:
       - name: Read existing submodules
         id: existing
         run: |
-          grep '^\[submodule ' .gitmodules \
-            | sed -E 's/\[submodule "(.+)"\]/\1/' > existing.txt || echo "" > existing.txt
+          awk -F' = ' '/path = / { print $2 }' .gitmodules > existing.txt || echo "" > existing.txt
 
       - name: Add new submodules via SSH
         id: add
         run: |
           added=false
           while read -r name url; do
+            echo "Checking if $name is already a submodule..."
             if [[ "$name" == "workspace" ]]; then
-              echo "Skipping self: $name"; continue
+              echo "Skipping self: $name"
+              continue
             fi
             if ! grep -Fxq "$name" existing.txt; then
               echo "Adding new submodule: $name"
