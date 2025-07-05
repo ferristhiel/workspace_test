@@ -5,7 +5,7 @@ on:
     branches:
       - main
   schedule:
-    - cron: '0 3 * * *' # daily at 03:00 UTC
+    - cron: '0 3 * * *'
   workflow_dispatch:
 
 permissions:
@@ -20,6 +20,7 @@ jobs:
         with:
           submodules: false
           fetch-depth: 0
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
 
       - name: Configure Git identity
         run: |
@@ -31,21 +32,20 @@ jobs:
           if [ ! -f .gitmodules ]; then
             echo "# Git submodules configuration" > .gitmodules
             git add .gitmodules
-            git commit -m "chore: initialize .gitmodules" || echo "nothing to commit"
+            git commit -m "chore: initialize .gitmodules" || echo "no changes"
           fi
 
-      - name: Setup SSH Agent with Deploy Key
-        uses: webfactory/ssh-agent@v0.7.0
+      - name: Setup SSH Agent
+        uses: webfactory/ssh-agent@v0.8.1
         with:
           ssh-private-key: ${{ secrets.DEPLOY_KEY }}
 
-      - name: Add github.com to known_hosts
+      - name: Add GitHub.com to known_hosts
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan github.com >> ~/.ssh/known_hosts
-          chmod 644 ~/.ssh/known_hosts
 
-      - name: Install dependencies
+      - name: Install GH CLI + jq
         run: |
           sudo apt-get update
           sudo apt-get install -y gh jq
@@ -53,52 +53,44 @@ jobs:
       - name: Authenticate GitHub CLI
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh auth setup-git
+        run: gh auth setup-git
 
       - name: Fetch all repos via GH CLI
         id: list
         run: |
           gh repo list joshuawiebe --limit 200 --json name,sshUrl \
             | jq -r '.[] | "\(.name) \(.sshUrl)"' > all_repos.txt
-          echo "=== All repositories ==="
-          cat all_repos.txt
 
       - name: Read existing submodules
         id: existing
         run: |
-          if [[ -f .gitmodules ]]; then
-            awk -F' = ' '/path = / { print $2 }' .gitmodules > existing.txt
-          else
-            touch existing.txt
-          fi
-          echo "=== Existing submodules ==="
-          cat existing.txt
+          grep -E '^\[submodule "' .gitmodules | sed -E 's/\[submodule "(.+)".*/\1/' > existing.txt || echo "" > existing.txt
 
       - name: Add new submodules via SSH
         id: add
         run: |
-          added=false
+          added="false"
           while read -r name url; do
-            echo "Checking if $name is already a submodule..."
-            if [[ "$name" == "workspace" ]]; then
-              echo "Skipping self: $name"
+            echo "Checking $name..."
+            if [ "$name" = "workspace" ] || [ "$name" = "workspace_test" ]; then
+              echo "  Skipping self"
               continue
             fi
-            if ! grep -Fxq "$name" existing.txt && [[ ! -d "$name" ]]; then
-              echo "Adding new submodule: $name"
+            if ! grep -Fxq "$name" existing.txt; then
+              echo "  Adding submodule: $name"
               git submodule add --branch main "$url" "$name"
               sed -i "/path = $name/a\\    ignore = all" .gitmodules
-              added=true
+              added="true"
+            else
+              echo "  Already exists"
             fi
           done < all_repos.txt
-          echo "added=$added" >> $GITHUB_OUTPUT
+          echo "::set-output name=added::$added"
 
       - name: Sort .gitmodules entries
         if: steps.add.outputs.added == 'true'
         run: |
-          awk 'BEGIN{RS=""; ORS="\n\n"} {print}' .gitmodules \
-            | sort -t '"' -k2 > .gitmodules.sorted
+          awk 'BEGIN{RS=""; ORS="\n\n"}1' .gitmodules | sort -t '"' -k2 > .gitmodules.sorted
           mv .gitmodules.sorted .gitmodules
 
       - name: Commit & push changes
