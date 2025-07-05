@@ -1,105 +1,57 @@
-name: Discover & Add New Submodules
+name: Discover & Add Repos via SSH
 
 on:
-  push:
-    branches:
-      - main
-  workflow_dispatch: {}
-  schedule:
-    - cron: '0 3 * * *'
-
-permissions:
-  contents: write
+  workflow_dispatch:
 
 jobs:
   discover-and-add:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout workspace
+      - name: Checkout main repo
         uses: actions/checkout@v4
         with:
-          submodules: false
           fetch-depth: 0
 
-      - name: Configure Git identity
+      - name: Set up SSH deploy key
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
 
-      - name: Ensure .gitmodules exists
-        run: |
-          if [ ! -f .gitmodules ]; then
-            echo "# Git submodules configuration" > .gitmodules
-            git add .gitmodules
-            git commit -m "chore: initialize .gitmodules" || echo "nothing to commit"
-          fi
-
-      - name: Install gh & jq
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gh jq
-
-      - name: Authenticate GH CLI
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh auth setup-git
-
-      - name: Fetch all repos for owner ${{ github.repository_owner }}
-        id: list
+      - name: Authenticate gh CLI
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh repo list ${{ github.repository_owner }} --limit 200 --json name,sshUrl \
-            | jq -r '.[] | "\(.name) \(.sshUrl)"' > all_repos.txt
-          echo "---- all_repos.txt ----"
-          head -n 10 all_repos.txt
-          echo "------------------------"
+          gh auth setup-git
+          gh auth status
 
-      - name: Read existing submodules
-        id: existing
+      - name: Discover all repos from user/org
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          grep '^\[submodule ' .gitmodules \
-            | sed -E 's/\[submodule "(.+)"\]/\1/' > existing.txt || echo "" > existing.txt
-          echo "---- existing.txt ----"
-          cat existing.txt
-          echo "----------------------"
+          gh repo list ferristhiel --limit 200 --json name,sshUrl |
+            jq -r '.[] | "\(.name) \(.sshUrl)"' > all_repos.txt
+          cat all_repos.txt
 
-      - name: Add any new submodules
-        id: add
+      - name: Add submodules for missing repos
         run: |
+          touch .gitmodules
           added=false
           while read -r name url; do
             echo "Considering: $name"
-            if [[ "$name" == "${{ github.event.repository.name }}" ]]; then
-              echo "  ❌ Skipping self: $name"
+            if [[ "$name" == "workspace_test" ]]; then
+              echo "  ❌ Skipping self"
               continue
             fi
-            if grep -Fxq "$name" existing.txt; then
-              echo "  ➡️ Already tracked: $name"
+            if grep -Fq "$name" .gitmodules; then
+              echo "  ⏩ Already in .gitmodules"
             else
-              echo "  ✅ Adding submodule: $name"
+              echo "  ✅ Adding submodule $name"
               git submodule add --branch main "$url" "$name"
               sed -i "/path = $name/a\\    ignore = all" .gitmodules
               added=true
             fi
           done < all_repos.txt
           echo "added=$added" >> $GITHUB_OUTPUT
-
-      - name: Sort .gitmodules entries
-        if: steps.add.outputs.added == 'true'
-        run: |
-          awk 'BEGIN{RS=""; ORS="\n\n"} {print}' .gitmodules \
-            | sort -t '"' -k2 > .gitmodules.sorted
-          mv .gitmodules.sorted .gitmodules
-
-      - name: Commit & push
-        if: steps.add.outputs.added == 'true'
-        run: |
-          git add .gitmodules
-          git commit -m "chore: auto-add new submodules and sort entries"
-          git push origin main
-
-      - name: No new submodules
-        if: steps.add.outputs.added == 'false'
-        run: echo "✅ No new repositories to add as submodules."
