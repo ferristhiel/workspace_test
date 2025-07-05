@@ -53,7 +53,7 @@ jobs:
             --limit 200 --json name,sshUrl \
             | jq -r '.[] | "\(.name) \(.sshUrl)"' \
             > all_repos.txt
-          echo "First 10 repos:"
+          echo "Sample of discovered repos:"
           head -n 10 all_repos.txt
 
       - name: Read existing submodules
@@ -62,7 +62,7 @@ jobs:
           grep '^\[submodule ' .gitmodules \
             | sed -E 's/\[submodule "(.+)"\]/\1/' \
             > existing.txt || echo "" > existing.txt
-          echo "Existing submodules:"
+          echo "Already tracked submodules:"
           cat existing.txt
 
       - name: Add any new submodules
@@ -70,10 +70,12 @@ jobs:
         run: |
           added=false
           while read -r name url; do
-            if [[ "$name" == "${{ github.repository }}" ]]; then
-              echo "Skipping self: $name"
+            # Skip the workspace repo itself by comparing to repository.name
+            if [[ "$name" == "${{ github.event.repository.name }}" ]]; then
+              echo "Skipping workspace itself: $name"
               continue
             fi
+            # Add if missing
             if ! grep -Fxq "$name" existing.txt; then
               echo "Adding submodule: $name"
               git submodule add --branch main "$url" "$name"
@@ -83,14 +85,14 @@ jobs:
           done < all_repos.txt
           echo "added=$added" >> $GITHUB_OUTPUT
 
-      - name: Sort .gitmodules
+      - name: Sort .gitmodules entries
         if: steps.add.outputs.added == 'true'
         run: |
-          awk 'BEGIN{RS=""; ORS="\n\n"} {print}' .gitmodules \
+          awk 'BEGIN{RS="" ; ORS="\n\n"} {print}' .gitmodules \
             | sort -t '"' -k2 > .gitmodules.sorted
           mv .gitmodules.sorted .gitmodules
 
-      - name: Commit & push
+      - name: Commit & push changes
         if: steps.add.outputs.added == 'true'
         run: |
           git add .gitmodules
