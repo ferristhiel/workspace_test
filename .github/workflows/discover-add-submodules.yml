@@ -6,7 +6,7 @@ on:
   workflow_dispatch: {}    # manual trigger
 
 permissions:
-  contents: write          # allow pushing changes
+  contents: write          # required to push changes
 
 jobs:
   discover-and-add:
@@ -18,6 +18,11 @@ jobs:
         with:
           submodules: false
           fetch-depth: 0
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Ensure .gitmodules exists
         run: |
@@ -73,16 +78,14 @@ jobs:
       - name: Sort .gitmodules entries
         if: steps.add.outputs.added == 'true'
         run: |
-          awk 'BEGIN{RS=""; ORS="\n\n"} {print}' .gitmodules \
-            | sort -t '"' -k2 > .gitmodules.sorted
+          awk 'BEGIN{RS=\"\"; ORS=\"\\n\\n\"} {print}' .gitmodules \
+            | sort -t '\"' -k2 > .gitmodules.sorted
           mv .gitmodules.sorted .gitmodules
 
       - name: Commit & push changes
         if: steps.add.outputs.added == 'true'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .gitmodules .git/config
+          git add .gitmodules
           git commit -m "chore: auto-add new submodules and sort entries"
           git push origin main
 
