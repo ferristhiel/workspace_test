@@ -2,10 +2,9 @@ name: Discover & Add New Submodules via SSH
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   schedule:
-    - cron: '0 3 * * *'    # daily at 03:00 UTC
+    - cron: '0 3 * * *'
   workflow_dispatch:
 
 permissions:
@@ -20,6 +19,7 @@ jobs:
         with:
           submodules: false
           fetch-depth: 0
+          ssh-key: ${{ secrets.SSH_PRIVATE_KEY_WORKSPACE }}
 
       - name: Configure Git identity
         run: |
@@ -34,7 +34,7 @@ jobs:
             git commit -m "chore: initialize .gitmodules" || echo "nothing to commit"
           fi
 
-      - name: Setup SSH Agent with Deploy Key
+      - name: Add github.com to known_hosts & start SSH agent
         uses: webfactory/ssh-agent@v0.7.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY_WORKSPACE }}
@@ -53,52 +53,54 @@ jobs:
       - name: Authenticate GitHub CLI
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh auth setup-git
+        run: gh auth setup-git
 
       - name: Fetch all repos via GH CLI
-        id: list
         run: |
           gh repo list joshuawiebe --limit 200 --json name,sshUrl \
             | jq -r '.[] | "\(.name) \(.sshUrl)"' > all_repos.txt
+          head -n 10 all_repos.txt
 
       - name: Read existing submodules
-        id: existing
-        run: |
-          grep '^\[submodule ' .gitmodules \
-            | sed -E 's/\[submodule "(.+)"\]/\1/' > existing.txt || echo "" > existing.txt
+        run: grep '^\[submodule ' .gitmodules \
+          | sed -E 's/\[submodule "(.+)"\]/\1/' > existing.txt || touch existing.txt
+        run: echo "Existing:`wc -l existing.txt`"
 
       - name: Add new submodules via SSH
         id: add
         run: |
           added=false
           while read -r name url; do
-            if [[ "$name" == "workspace" ]]; then
-              echo "Skipping self: $name"; continue
+            echo "Checking $name..."
+            if [[ "$name" == "workspace"* ]]; then
+              echo "  ❌ Skip root/self: $name"
+              continue
             fi
             if ! grep -Fxq "$name" existing.txt; then
-              echo "Adding new submodule: $name"
+              echo "  ✅ Adding submodule: $name"
               git submodule add --branch main "$url" "$name"
               sed -i "/path = $name/a\\    ignore = all" .gitmodules
               added=true
+            else
+              echo "  → Already tracked: $name"
             fi
           done < all_repos.txt
           echo "added=$added" >> $GITHUB_OUTPUT
 
-      - name: Sort .gitmodules entries
+      - name: Sort .gitmodules
         if: steps.add.outputs.added == 'true'
         run: |
           awk 'BEGIN{RS=""; ORS="\n\n"} {print}' .gitmodules \
             | sort -t '"' -k2 > .gitmodules.sorted
           mv .gitmodules.sorted .gitmodules
 
-      - name: Commit & push changes
+      - name: Commit & push new submodules
         if: steps.add.outputs.added == 'true'
         run: |
           git add .gitmodules
           git commit -m "chore: auto-add new submodules and sort entries"
           git push origin main
 
-      - name: No new submodules
+      - name: Nothing to do
         if: steps.add.outputs.added == 'false'
-        run: echo "✅ No new repositories to add as submodules."
+        run: echo "✅ No new repositories found."
