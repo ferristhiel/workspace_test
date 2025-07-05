@@ -1,36 +1,104 @@
-name: Clone Private Repos with SSH Deploy Key
+name: Discover & Add New Submodules via SSH
 
 on:
   push:
     branches:
       - main
+  schedule:
+    - cron: '0 3 * * *'    # daily at 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
-  clone-with-ssh:
+  discover-and-add:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository with submodules
-        uses: actions/checkout@v3
+      - name: Checkout workspace (no submodules)
+        uses: actions/checkout@v4
         with:
+          submodules: false
           fetch-depth: 0
-          submodules: 'recursive'   # must be string, not comment or boolean
 
-      - name: Setup SSH Agent and add deploy key
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Ensure .gitmodules exists
+        run: |
+          if [ ! -f .gitmodules ]; then
+            echo "# Git submodules configuration" > .gitmodules
+            git add .gitmodules
+            git commit -m "chore: initialize .gitmodules" || echo "nothing to commit"
+          fi
+
+      - name: Setup SSH Agent with Deploy Key
         uses: webfactory/ssh-agent@v0.7.0
         with:
           ssh-private-key: ${{ secrets.DEPLOY_KEY }}
 
-      - name: Add GitHub.com to known_hosts
+      - name: Add github.com to known_hosts
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan github.com >> ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
-      - name: Verify SSH access to GitHub
-        run: ssh -T git@github.com || true
-
-      - name: Clone additional private repo (if needed)
+      - name: Install dependencies
         run: |
-          git clone git@github.com:your-username/private-repo.git
+          sudo apt-get update
+          sudo apt-get install -y gh jq
 
-      # Add your other build/test/deploy steps here
+      - name: Authenticate GitHub CLI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh auth setup-git
+
+      - name: Fetch all repos via GH CLI
+        id: list
+        run: |
+          gh repo list joshuawiebe --limit 200 --json name,sshUrl \
+            | jq -r '.[] | "\(.name) \(.sshUrl)"' > all_repos.txt
+
+      - name: Read existing submodules
+        id: existing
+        run: |
+          grep '^\[submodule ' .gitmodules \
+            | sed -E 's/\[submodule "(.+)"\]/\1/' > existing.txt || echo "" > existing.txt
+
+      - name: Add new submodules via SSH
+        id: add
+        run: |
+          added=false
+          while read -r name url; do
+            if [[ "$name" == "workspace" ]]; then
+              echo "Skipping self: $name"; continue
+            fi
+            if ! grep -Fxq "$name" existing.txt; then
+              echo "Adding new submodule: $name"
+              git submodule add --branch main "$url" "$name"
+              sed -i "/path = $name/a\\    ignore = all" .gitmodules
+              added=true
+            fi
+          done < all_repos.txt
+          echo "added=$added" >> $GITHUB_OUTPUT
+
+      - name: Sort .gitmodules entries
+        if: steps.add.outputs.added == 'true'
+        run: |
+          awk 'BEGIN{RS=""; ORS="\n\n"} {print}' .gitmodules \
+            | sort -t '"' -k2 > .gitmodules.sorted
+          mv .gitmodules.sorted .gitmodules
+
+      - name: Commit & push changes
+        if: steps.add.outputs.added == 'true'
+        run: |
+          git add .gitmodules
+          git commit -m "chore: auto-add new submodules and sort entries"
+          git push origin main
+
+      - name: No new submodules
+        if: steps.add.outputs.added == 'false'
+        run: echo "✅ No new repositories to add as submodules."
