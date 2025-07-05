@@ -1,17 +1,19 @@
 name: Discover & Add New Submodules
 
 on:
+  push:
+    branches:
+      - main
   schedule:
     - cron: '0 3 * * *'    # daily at 03:00 UTC
   workflow_dispatch: {}    # manual trigger
 
 permissions:
-  contents: write          # required to push changes
+  contents: write
 
 jobs:
   discover-and-add:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout workspace
         uses: actions/checkout@v4
@@ -59,16 +61,11 @@ jobs:
         run: |
           added=false
           while read -r name url; do
-            # Skip the workspace repo itself
             if [[ "$name" == "workspace" ]]; then
-              echo "Skipping self: $name"
-              continue
+              echo "Skipping self: $name"; continue
             fi
-            # Add if missing
             if ! grep -Fxq "$name" existing.txt; then
-              echo "Adding submodule: $name"
               git submodule add --branch main "$url" "$name"
-              # Inject ignore = all
               sed -i "/path = $name/a\\    ignore = all" .gitmodules
               added=true
             fi
