@@ -1,57 +1,41 @@
-name: Discover & Add Repos via SSH
+name: Clone Private Repos with SSH Deploy Key
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
-  discover-and-add:
+  clone-with-ssh:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout main repo
-        uses: actions/checkout@v4
+      - name: Checkout (shallow=false to allow full git history)
+        uses: actions/checkout@v3
         with:
           fetch-depth: 0
+          # If you have submodules:
+          submodules: recursive
 
-      - name: Set up SSH deploy key
+      - name: Setup SSH Agent and add deploy key
+        uses: webfactory/ssh-agent@v0.8.1
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+
+      - name: Add GitHub.com to known_hosts
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan github.com >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
 
-      - name: Authenticate gh CLI
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh auth setup-git
-          gh auth status
+      - name: Verify SSH access
+        run: ssh -T git@github.com || true
 
-      - name: Discover all repos from user/org
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Clone additional private repo or submodule if needed
         run: |
-          gh repo list ferristhiel --limit 200 --json name,sshUrl |
-            jq -r '.[] | "\(.name) \(.sshUrl)"' > all_repos.txt
-          cat all_repos.txt
+          # Example of cloning another private repo with SSH:
+          git clone git@github.com:username/private-repo.git
+          
+          # OR if using submodules, update them explicitly:
+          git submodule update --init --recursive
 
-      - name: Add submodules for missing repos
-        run: |
-          touch .gitmodules
-          added=false
-          while read -r name url; do
-            echo "Considering: $name"
-            if [[ "$name" == "workspace_test" ]]; then
-              echo "  ❌ Skipping self"
-              continue
-            fi
-            if grep -Fq "$name" .gitmodules; then
-              echo "  ⏩ Already in .gitmodules"
-            else
-              echo "  ✅ Adding submodule $name"
-              git submodule add --branch main "$url" "$name"
-              sed -i "/path = $name/a\\    ignore = all" .gitmodules
-              added=true
-            fi
-          done < all_repos.txt
-          echo "added=$added" >> $GITHUB_OUTPUT
+      # Add your other build/test/deploy steps here
