@@ -5,7 +5,7 @@ on:
     branches:
       - main
   schedule:
-    - cron: '0 3 * * *'    # daily at 03:00 UTC
+    - cron: '0 3 * * *' # daily at 03:00 UTC
   workflow_dispatch:
 
 permissions:
@@ -53,18 +53,27 @@ jobs:
       - name: Authenticate GitHub CLI
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh auth setup-git
+        run: |
+          gh auth setup-git
 
       - name: Fetch all repos via GH CLI
         id: list
         run: |
           gh repo list joshuawiebe --limit 200 --json name,sshUrl \
             | jq -r '.[] | "\(.name) \(.sshUrl)"' > all_repos.txt
+          echo "=== All repositories ==="
+          cat all_repos.txt
 
       - name: Read existing submodules
         id: existing
         run: |
-          awk -F' = ' '/path = / { print $2 }' .gitmodules > existing.txt || echo "" > existing.txt
+          if [[ -f .gitmodules ]]; then
+            awk -F' = ' '/path = / { print $2 }' .gitmodules > existing.txt
+          else
+            touch existing.txt
+          fi
+          echo "=== Existing submodules ==="
+          cat existing.txt
 
       - name: Add new submodules via SSH
         id: add
@@ -76,7 +85,7 @@ jobs:
               echo "Skipping self: $name"
               continue
             fi
-            if ! grep -Fxq "$name" existing.txt; then
+            if ! grep -Fxq "$name" existing.txt && [[ ! -d "$name" ]]; then
               echo "Adding new submodule: $name"
               git submodule add --branch main "$url" "$name"
               sed -i "/path = $name/a\\    ignore = all" .gitmodules
