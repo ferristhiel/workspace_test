@@ -19,7 +19,7 @@ jobs:
         with:
           submodules: false
           fetch-depth: 0
-          ssh-key: ${{ secrets.SSH_PRIVATE_KEY_WORKSPACE }}
+          ssh-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       - name: Configure Git identity
         run: |
@@ -34,13 +34,11 @@ jobs:
             git commit -m "chore: initialize .gitmodules" || echo "nothing to commit"
           fi
 
-      - name: Add github.com to known_hosts & start SSH agent
-        uses: webfactory/ssh-agent@v0.7.0
+      - name: Setup SSH Agent & known_hosts
+        uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY_WORKSPACE }}
-
-      - name: Add github.com to known_hosts
-        run: |
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      - run: |
           mkdir -p ~/.ssh
           ssh-keyscan github.com >> ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
@@ -50,7 +48,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gh jq
 
-      - name: Authenticate GitHub CLI
+      - name: Authenticate GH CLI
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh auth setup-git
@@ -59,12 +57,14 @@ jobs:
         run: |
           gh repo list joshuawiebe --limit 200 --json name,sshUrl \
             | jq -r '.[] | "\(.name) \(.sshUrl)"' > all_repos.txt
+          echo "First 10 repos:"
           head -n 10 all_repos.txt
 
       - name: Read existing submodules
-        run: grep '^\[submodule ' .gitmodules \
-          | sed -E 's/\[submodule "(.+)"\]/\1/' > existing.txt || touch existing.txt
-        run: echo "Existing:`wc -l existing.txt`"
+        run: |
+          grep '^\[submodule ' .gitmodules \
+            | sed -E 's/\[submodule "(.+)"\]/\1/' > existing.txt || touch existing.txt
+          echo "Existing count: $(wc -l < existing.txt)"
 
       - name: Add new submodules via SSH
         id: add
@@ -72,17 +72,14 @@ jobs:
           added=false
           while read -r name url; do
             echo "Checking $name..."
-            if [[ "$name" == "workspace"* ]]; then
-              echo "  ❌ Skip root/self: $name"
-              continue
-            fi
+            [[ "$name" =~ workspace ]] && { echo "Skipping workspace root"; continue; }
             if ! grep -Fxq "$name" existing.txt; then
-              echo "  ✅ Adding submodule: $name"
+              echo "✅ Adding submodule: $name"
               git submodule add --branch main "$url" "$name"
               sed -i "/path = $name/a\\    ignore = all" .gitmodules
               added=true
             else
-              echo "  → Already tracked: $name"
+              echo "➡️ Already tracked: $name"
             fi
           done < all_repos.txt
           echo "added=$added" >> $GITHUB_OUTPUT
@@ -94,7 +91,7 @@ jobs:
             | sort -t '"' -k2 > .gitmodules.sorted
           mv .gitmodules.sorted .gitmodules
 
-      - name: Commit & push new submodules
+      - name: Commit & push changes
         if: steps.add.outputs.added == 'true'
         run: |
           git add .gitmodules
