@@ -23,10 +23,11 @@ jobs:
           submodules: false
           fetch-depth: 0
 
-      - name: Setup SSH Agent & known_hosts
+      - name: Setup SSH Agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
       - name: Add github.com to known_hosts
         run: |
           mkdir -p ~/.ssh
@@ -43,7 +44,7 @@ jobs:
           if [ ! -f .gitmodules ]; then
             touch .gitmodules
             git add .gitmodules
-            git commit -m "chore: initialize .gitmodules" || echo "nothing to commit"
+            git commit -m "chore: initialize .gitmodules" || true
           fi
 
       - name: Install dependencies
@@ -55,14 +56,10 @@ jobs:
         run: |
           gh repo list joshuawiebe --limit 200 --json name,sshUrl \
             | jq -r '.[] | "\(.name) \(.sshUrl)"' > all_repos.txt
-          echo "First 10 repos:"
-          head -n 10 all_repos.txt
 
       - name: Read existing submodules
         run: |
-          grep '^\[submodule ' .gitmodules \
-            | sed -E 's/\[submodule "(.+)"\]/\1/' > existing.txt || touch existing.txt
-          echo "Existing submodules count: $(wc -l < existing.txt)"
+          grep '^\[submodule ' .gitmodules | sed -E 's/\[submodule "(.+)"\]/\1/' > existing.txt || true
 
       - name: Add new submodules via SSH
         id: add
@@ -70,16 +67,12 @@ jobs:
           set -e
           added=false
           while read -r name url; do
-            echo "Checking $name..."
-            [[ "$name" =~ workspace ]] && { echo "Skipping workspace root"; continue; }
+            [[ -z "$name" || "$name" =~ workspace ]] && continue
             if ! grep -Fxq "$name" existing.txt; then
-              echo "✅ Adding submodule: $name"
               git submodule add --force --name "$name" --branch main "$url" "$name" || continue
               sed -i "/path = $name/a\\    ignore = all" .gitmodules
               git add .gitmodules "$name"
               added=true
-            else
-              echo "➡️ Already tracked: $name"
             fi
           done < all_repos.txt
           echo "added=$added" >> $GITHUB_OUTPUT
